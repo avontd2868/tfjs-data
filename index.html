@@ -1,0 +1,11 @@
+<script src="https://unpkg.com/@tensorflow/tfjs@0.14.1/dist/tf.js"></script>
+<script>
+async function run() {
+  const a = tf.ones([2, 1]);
+  const b = tf.ones([2, 1]);
+  const ds = tf.data.array([a, b])
+  await ds.forEach(elem => elem.print());
+  console.log(a.isDisposed);
+}
+run();
+</script>

@@ -552,4 +552,13 @@ describeWithFlags('Dataset', tf.test_util.CPU_ENVS, () => {
     // forEach consumed all of the input Tensors.
     expect(tf.memory().numTensors).toEqual(0);
   });
+
+  it('forEach does not dispose original Tensors', async () => {
+    const a = tf.ones([]);
+    const b = tf.ones([]);
+    const ds = tfd.array([a, b]);
+    await ds.forEach(elem => {});
+    expect(a.isDisposed).toBe(false);
+    expect(b.isDisposed).toBe(false);
+  });
 });

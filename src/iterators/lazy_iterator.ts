@@ -189,20 +189,6 @@ export abstract class LazyIterator<T> {
   }
 
   /**
-   * Draw items from the stream until it is exhausted.
-   *
-   * This can be useful when the stream has side effects but no output.  In
-   * that case, calling this function guarantees that the stream will be
-   * fully processed.
-   */
-  async resolveFully(): Promise<void> {
-    let x = await this.next();
-    while (!x.done) {
-      x = await this.next();
-    }
-  }
-
-  /**
    * Draw items from the stream until it is exhausted, or a predicate fails.
    *
    * This can be useful when the stream has side effects but no output.  In
@@ -302,7 +288,14 @@ export abstract class LazyIterator<T> {
    * @param f A function to apply to each stream element.
    */
   async forEach(f: (value: T) => void): Promise<void> {
-    return this.map(f).resolveFully();
+    while (true) {
+      const x = await this.next();
+      if (x.done) {
+        break;
+      }
+      f(x.value);
+      tf.dispose(x.value as {});
+    }
   }
 
   /**
@@ -486,6 +479,7 @@ class ArrayIterator<T> extends LazyIterator<T> {
       return {value: null, done: true};
     }
     const result = this.items[this.trav];
+    const tensors = getTensorsInContainer(result);
     this.trav++;
     return {value: result, done: false};
   }
@@ -674,7 +668,7 @@ class FilterIterator<T> extends LazyIterator<T> {
   private async serialNext(): Promise<IteratorResult<T>> {
     while (true) {
       const item = await this.upstream.next();
-      if (item.done || this.predicate(item.value)) {
+      if (item.done || tf.tidy(() => this.predicate(item.value))) {
         return item;
       }
       tf.dispose(item.value as {});
@@ -694,18 +688,16 @@ class MapIterator<I, O> extends LazyIterator<O> {
   }
 
   async next(): Promise<IteratorResult<O>> {
-    const item = await this.upstream.next();
-    if (item.done) {
+    const {value, done} = await this.upstream.next();
+    if (done) {
       return {value: null, done: true};
     }
-    const inputTensors = getTensorsInContainer(item.value as {});
+    const inputTensors = getTensorsInContainer(value as {});
     // Careful: the transform may mutate the item in place.
     // That's why we have to remember the input Tensors above, and then
     // below dispose only those that were not passed through to the output.
-    // Note too that the transform function is responsible for tidying
-    // any intermediate Tensors.  Here we are concerned only about the
-    // inputs.
-    const mapped = this.transform(item.value);
+    // Here we are concerned only about the inputs.
+    const mapped = tf.tidy(() => this.transform(value) as {}) as O;
     const outputTensors = getTensorsInContainer(mapped as {});
 
     // TODO(soergel) faster intersection
@@ -881,9 +873,8 @@ class FlatmapIterator<I, O> extends OneToManyIterator<O> {
     // Careful: the transform may mutate the item in place.
     // that's why we have to remember the input Tensors above, and then
     // below dispose only those that were not passed through to the output.
-    // Note too that the transform function is responsible for tidying any
-    // intermediate Tensors.  Here we are concerned only about the inputs.
-    const mappedArray = this.transform(item.value);
+    // Here we are concerned only about the inputs.
+    const mappedArray = tf.tidy(() => this.transform(item.value) as {}) as O[];
     const outputTensors = getTensorsInContainer(mappedArray as {});
     this.outputQueue.pushAll(mappedArray);
 
